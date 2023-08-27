@@ -20,6 +20,7 @@ import math
 import pathlib
 from typing import Dict, Optional, Sequence
 import os
+from functools import lru_cache
 
 import numpy as np
 import torch
@@ -30,9 +31,9 @@ from transformers.trainer_pt_utils import LabelSmoother
 
 from fastchat.conversation import SeparatorStyle
 from fastchat.model.model_adapter import get_conversation_template
+from fastchat.prompts import PROMPT_TEMPLATE_MAP
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
-
 
 @dataclass
 class ModelArguments:
@@ -51,6 +52,7 @@ class DataArguments:
     dataset_random_seed: int = field(
         default=1311, metadata={"help": "Random seed for data shuffling"}
     )
+    model_type: str = "vicuna"
 
 
 
@@ -83,12 +85,35 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
         trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
 
 
+@lru_cache()
+def get_tool_sys_prompt(tool_type):
+    chosen_template_cls = PROMPT_TEMPLATE_MAP[tool_type]()
+
+    prefix = chosen_template_cls.PREFIX
+    tools  = chosen_template_cls.TOOLS
+    format_instructions = chosen_template_cls.FORMAT_INSTRUCTIONS
+    suffix = chosen_template_cls.SUFFIX
+
+    return '\n\n'.join([prefix, tools, format_instructions, suffix])
+
+
 def preprocess(
     sources,
     tokenizer: transformers.PreTrainedTokenizer,
+    model_type: str = "vicuna",
+    system_prompt: str = "",
+    use_tool: bool = False,
+    tool_type:str = 'math',
 ) -> Dict:
-    conv = get_conversation_template("vicuna")
+    conv = get_conversation_template(model_type)
     roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
+
+    if use_tool:
+        if not tool_type:
+            raise Exception(f"tool: {tool_type} not found")
+        conv.system = get_tool_sys_prompt(tool_type+'_template')
+    if system_prompt:
+        conv.system = system_prompt.strip()
 
     # Apply prompt templates
     conversations = []
@@ -190,7 +215,7 @@ class SupervisedDataset(Dataset):
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, raw_data, tokenizer: transformers.PreTrainedTokenizer):
+    def __init__(self, raw_data, tokenizer: transformers.PreTrainedTokenizer, model_type='vicuna'):
         super(LazySupervisedDataset, self).__init__()
         self.tokenizer = tokenizer
 
@@ -198,6 +223,7 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.raw_data = raw_data
         self.cached_data_dict = {}
+        self.model_type = model_type
 
     def __len__(self):
         return len(self.raw_data)
@@ -206,7 +232,12 @@ class LazySupervisedDataset(Dataset):
         if i in self.cached_data_dict:
             return self.cached_data_dict[i]
 
-        ret = preprocess([self.raw_data[i]["conversations"]], self.tokenizer)
+        ret = preprocess([self.raw_data[i]["conversations"]], 
+                         self.tokenizer,
+                         model_type=self.model_type,
+                         system_prompt=self.raw_data[i].get("sys_prompt", ""),
+                         use_tool=self.raw_data[i].get("use_tool", False),
+                         tool_type=self.raw_data[i].get("tool_type", 'math'),)
         ret = dict(
             input_ids=ret["input_ids"][0],
             labels=ret["labels"][0],
@@ -258,11 +289,11 @@ def make_supervised_data_module(
     perm_train = np.random.permutation(len(train_raw_data))
     train_json = [train_raw_data[i] for i in perm_train]
     
-    train_dataset = dataset_cls(train_json, tokenizer=tokenizer)
+    train_dataset = dataset_cls(train_json, tokenizer=tokenizer, model_type=data_args.model_type)
 
     if data_args.eval_data_path:
         eval_json = load_all_raw_data_from_dir(data_args.eval_data_path, 'val')
-        eval_dataset = dataset_cls(eval_json, tokenizer=tokenizer)
+        eval_dataset = dataset_cls(eval_json, tokenizer=tokenizer, model_type=data_args.model_type)
     else:
         eval_dataset = None
 
