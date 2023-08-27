@@ -19,6 +19,7 @@ import json
 import math
 import pathlib
 from typing import Dict, Optional, Sequence
+import os
 
 import numpy as np
 import torch
@@ -47,6 +48,10 @@ class DataArguments:
         default=None, metadata={"help": "Path to the evaluation data."}
     )
     lazy_preprocess: bool = False
+    dataset_random_seed: int = field(
+        default=1311, metadata={"help": "Random seed for data shuffling"}
+    )
+
 
 
 @dataclass
@@ -212,6 +217,30 @@ class LazySupervisedDataset(Dataset):
         return ret
 
 
+def load_raw_data(path):
+    with open(path, mode='r') as f:
+        lines = [json.loads(l) for l in f.readlines() if l]
+
+    return lines
+
+
+def load_all_raw_data_from_dir(base_dir, data_type='train'):
+    train_raw_data = []
+    select_data_type = lambda x, file: f"{x}.jsonl" in file
+    for root, dirs, files in os.walk(base_dir):
+        train_flist = [os.path.join(root, f) for f in files if select_data_type(data_type, f)]
+
+        train_raw_data.extend([i for f in train_flist for i in load_raw_data(f)])
+
+        for dir in dirs:
+            train = load_all_raw_data_from_dir(os.path.join(root, dir), data_type)
+            train_raw_data.extend(train)
+
+        break
+
+    return train_raw_data
+
+
 def make_supervised_data_module(
     tokenizer: transformers.PreTrainedTokenizer, data_args
 ) -> Dict:
@@ -221,14 +250,26 @@ def make_supervised_data_module(
     )
     rank0_print("Loading data...")
 
-    train_json = json.load(open(data_args.data_path, "r"))
+    train_raw_data = load_all_raw_data_from_dir(data_args.data_path, 'train')
+
+    # Split train/test
+    seed = int(data_args.dataset_random_seed) if data_args.dataset_random_seed else 1311
+    np.random.seed(seed)
+    perm_train = np.random.permutation(len(train_raw_data))
+    train_json = [train_raw_data[i] for i in perm_train]
+    
     train_dataset = dataset_cls(train_json, tokenizer=tokenizer)
 
     if data_args.eval_data_path:
-        eval_json = json.load(open(data_args.eval_data_path, "r"))
+        eval_json = load_all_raw_data_from_dir(data_args.eval_data_path, 'val')
         eval_dataset = dataset_cls(eval_json, tokenizer=tokenizer)
     else:
         eval_dataset = None
+
+    if not eval_dataset:
+        rank0_print(f"#train {len(train_dataset)}")
+    else:
+        rank0_print(f"#train {len(train_dataset)}, #eval {len(eval_dataset)}")
 
     return dict(train_dataset=train_dataset, eval_dataset=eval_dataset)
 
