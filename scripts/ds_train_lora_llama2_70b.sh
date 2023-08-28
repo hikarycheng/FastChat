@@ -1,5 +1,5 @@
 # available_gpus=0,1,2,3,4,5,6,7
-AVAILABLE_GPUS=0,1,2,3,4,5
+AVAILABLE_GPUS=6
 DATASET_TYPE=mix
 MODEL_TYPE=vicuna
 
@@ -27,8 +27,8 @@ TRAIN_ARGS="\
     --tf32 True \
     --fp16 True \
     --num_train_epochs $n_epochs \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
     --gradient_accumulation_steps 2 \
 "
 
@@ -45,16 +45,16 @@ deepspeed --include=localhost:$AVAILABLE_GPUS --master_port=$PORT fastchat/train
     --deepspeed playground/deepspeed_config_s3.json \
     --output_dir checkpoints/$SAVE_TAG \
     --evaluation_strategy "steps" \
-    --eval_steps 500 \
+    --eval_steps 1000 \
     --save_strategy "steps" \
-    --save_steps 500 \
+    --save_steps 1000 \
     --save_total_limit 5 \
     --learning_rate 2e-5 \
     --weight_decay 0. \
     --warmup_ratio 0.04 \
     --lr_scheduler_type "cosine" \
     --logging_steps 1 \
-    --model_max_length 2048 \
+    --model_max_length 4096 \
     $DATA_ARGS \
     $LORA_ARGS \
     $TRAIN_ARGS \
