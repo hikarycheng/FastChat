@@ -2,6 +2,7 @@
 
 import math
 import os
+import re
 import sys
 from typing import Dict, List, Optional
 import warnings
@@ -561,9 +562,13 @@ class AiroborosAdapter(BaseModelAdapter):
     """The model adapter for jondurbin/airoboros-*"""
 
     def match(self, model_path: str):
-        return "airoboros" in model_path.lower()
+        if re.search(r"airoboros|spicyboros", model_path, re.I):
+            return True
+        return False
 
     def get_default_conv_template(self, model_path: str) -> Conversation:
+        if "spicyboros" in model_path or re.search(r"-(2\.[2-9]+)", model_path):
+            return get_conv_template("airoboros_v2")
         return get_conv_template("airoboros_v1")
 
     def load_model(self, model_path: str, from_pretrained_kwargs: dict):
@@ -642,6 +647,13 @@ class T5Adapter(BaseModelAdapter):
             model_path, low_cpu_mem_usage=True, **from_pretrained_kwargs
         )
         return model, tokenizer
+
+
+class FlanAdapter(T5Adapter):
+    """The model adapter for flan-t5-*, flan-ul2"""
+
+    def match(self, model_path: str):
+        return "flan" in model_path.lower()
 
 
 class KoalaAdapter(BaseModelAdapter):
@@ -1339,7 +1351,8 @@ class QwenChatAdapter(BaseModelAdapter):
             model_path,
             trust_remote_code=True,
         )
-        config.use_flash_attn = False
+        # NOTE: if you use the old version of model file, please remove the comments below
+        # config.use_flash_attn = False
         config.fp16 = True
         generation_config = GenerationConfig.from_pretrained(
             model_path, trust_remote_code=True
@@ -1404,7 +1417,7 @@ class E5Adapter(BaseModelAdapter):
     use_fast_tokenizer = False
 
     def match(self, model_path: str):
-        return "e5" in model_path.lower()
+        return "e5-" in model_path.lower()
 
     def load_model(self, model_path: str, from_pretrained_kwargs: dict):
         revision = from_pretrained_kwargs.get("revision", "main")
@@ -1586,6 +1599,7 @@ register_model_adapter(AiroborosAdapter)
 register_model_adapter(LongChatAdapter)
 register_model_adapter(CodeT5pAdapter)
 register_model_adapter(T5Adapter)
+register_model_adapter(FlanAdapter)
 register_model_adapter(KoalaAdapter)
 register_model_adapter(AlpacaAdapter)
 register_model_adapter(ChatGLMAdapter)
